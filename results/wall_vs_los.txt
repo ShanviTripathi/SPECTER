@@ -1,0 +1,7 @@
+Through-wall vs line-of-sight (EMPTY baselines)
+  LOS baseline : PHASE2_LOS_EMPTY_20261027_092157_120s.csv
+  WALL baseline: PHASE2_WALL_EMPTY_20261027_090211_120s.csv
+  mean RSSI : LOS -53.0 dBm -> WALL -68.6 dBm  (-15.6 dB)
+  mean CSI amplitude : LOS 28.95 -> WALL 31.52  (+0.7 dB)  [receiver gain control can hide path loss here - trust RSSI for attenuation]
+  amplitude variance : LOS 16.9 -> WALL 14.74
+  packet delivery    : LOS 89.7% -> WALL 85.5%

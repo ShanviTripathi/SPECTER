@@ -1,46 +1,163 @@
-# SPECTER code (Phase 2 + Phase 3 tooling)
+# SPECTER
 
-Drop everything into `C:\specter` (overwrite `analyze_csi.py` and `capture_csi.py`; `live_csi_visualizer.py` is unchanged).
-Install once: `pip install -r requirements.txt`
+**Wi-Fi sensing toolkit that detects human motion from Channel State Information (CSI) captured on an ESP32.**
 
-| Script | What it does |
+SPECTER records how a Wi-Fi signal changes as it travels through a room, then analyzes those changes to decide whether something is moving in the signal's path. It works in line-of-sight and through-wall setups, and it measures how often everyday interference (fans, air conditioning, doors) triggers false alarms.
+
+---
+
+## Table of Contents
+
+- [How It Works](#how-it-works)
+- [Features](#features)
+- [Project Structure](#project-structure)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Naming Scenarios](#naming-scenarios)
+- [Recording Guidelines](#recording-guidelines)
+- [Analysis Output](#analysis-output)
+- [Interpreting Results](#interpreting-results)
+
+---
+
+## How It Works
+
+Wi-Fi signals reach a receiver along many paths: directly, and bounced off walls, furniture, and people. **Channel State Information (CSI)** describes how each Wi-Fi subcarrier was altered along those paths. When a person moves, the paths change, and the CSI fluctuates far more than it does in an empty room.
+
+SPECTER turns that idea into a measurable pipeline:
+
+1. **Capture.** An ESP32 running Espressif's [esp-csi](https://github.com/espressif/esp-csi) firmware streams CSI over USB serial. SPECTER records it as a labeled CSV file, one per scenario.
+2. **Clean.** Isolated spikes in the CSI amplitude are detected and removed so single glitches do not look like motion.
+3. **Establish a baseline.** A recording of the empty space (`EMPTY`) defines what "no motion" looks like, and a detection threshold is learned from it.
+4. **Detect.** Every other recording is split into 1-second windows. A window is flagged as an alarm when its variability exceeds the learned threshold.
+5. **Compare.** The share of flagged windows per scenario shows what the detector catches (people moving) and what fools it (fans, AC, doors).
+
+---
+
+## Features
+
+- Guided, repeatable recording sessions with on-screen instructions per scenario
+- Automatic retry and a session log when a recording fails
+- Spike removal, baseline-relative statistics, and a tunable motion detector
+- Line-of-sight (LOS) vs. through-wall (WALL) comparison
+- Automatic warning when signal strength differs between recordings enough to make the comparison unfair
+- Summary tables and plots generated in one command
+- Live CSI visualizer for checking the hardware setup
+
+---
+
+## Project Structure
+
+| File | Purpose |
 |---|---|
-| `capture_csi.py` | Records one labeled CSV. New: `--list-ports`, clear errors, exit code 1 if no packets came in. |
-| `run_session.py` | **New.** Guided multi-scenario recording (wall, fan low/high, AC, door) with per-scenario instructions, retry on failure and a notes log (`data/session_log.csv`). |
-| `analyze_csi.py` | Upgraded: spike removal, ratio vs. the matching EMPTY baseline, motion-detector alarm rate, LOS-vs-WALL report, 2 extra plots. |
-| `rehearsal_timer.py` | **New.** ~1 min/slide timer with per-slide results saved to `rehearsal/`. |
-| `backup_specter.py` | **New.** Zips `C:\specter` + `esp-csi-master` to a USB/Drive folder, with SHA-256 manifest and verification. |
-| `live_csi_visualizer.py` | Unchanged. |
+| `capture_csi.py` | Records one labeled CSV from the ESP32. Includes `--list-ports` and exits with code 1 if no packets arrive. |
+| `run_session.py` | Guided multi-scenario recording with instructions, retries, and a notes log at `data/session_log.csv`. |
+| `analyze_csi.py` | Cleans data, builds the baseline, runs the detector, and writes tables and plots to `results/`. |
+| `live_csi_visualizer.py` | Real-time CSI plot for verifying the setup. |
+| `requirements.txt` | Python dependencies. |
 
-## Recording the missing scenarios
+Folders created as you work: `data/` (recordings and session log) and `results/` (analysis output).
+
+---
+
+## Installation
+
+**Requirements**
+
+- Python 3.9 or newer
+- An ESP32 flashed with the `esp-csi` firmware and connected over USB
+
+```bash
+git clone https://github.com/EchoInSilicon/specter.git
+cd specter
+pip install -r requirements.txt
 ```
+
+---
+
+## Usage
+
+**1. Find your ESP32's serial port**
+
+```bash
 python capture_csi.py --list-ports
-python run_session.py --port COM5 --preset wall      # WALL_EMPTY, WALL_STATIONARY, WALL_MOVING (~5 min)
-python run_session.py --port COM5 --preset env       # LOS_FAN_LOW, LOS_FAN_HIGH, LOS_AC, LOS_DOOR (~5 min)
-python run_session.py --port COM5 --preset all --dry-run   # preview the plan
+```
+
+**2. Record scenarios**
+
+```bash
+# Through-wall set: WALL_EMPTY, WALL_STATIONARY, WALL_MOVING (about 5 min)
+python run_session.py --port COM5 --preset wall
+
+# Interference set: LOS_FAN_LOW, LOS_FAN_HIGH, LOS_AC, LOS_DOOR (about 5 min)
+python run_session.py --port COM5 --preset env
+
+# Preview a session without recording
+python run_session.py --port COM5 --preset all --dry-run
+```
+
+To record a single scenario manually, use `capture_csi.py` directly.
+
+**3. Analyze**
+
+```bash
 python analyze_csi.py
 ```
-Rules that keep the comparison fair:
-- Name scenarios `<LOS|WALL>_<TYPE>[_VARIANT]`. Each prefix is compared against its own `<PREFIX>_EMPTY`, so record a WALL_EMPTY first.
-- Do not move the boards between recordings of the same set. Your current LOS data shows mean RSSI of -69 dBm for EMPTY but -77 to -85 dBm for the others; if the boards were not moved that is the person/fan in the path, but if they were, the variance comparison is not apples to apples. `analyze_csi.py` prints a note whenever the gap exceeds 5 dB.
-- Re-record LOS_FAN_LOW/HIGH with nobody in the room, so any alarm is a true false alarm.
-- If you can, record each scenario twice (different time of day) so a slide can say "repeatable".
 
-## New analysis outputs (`results/`)
-- `summary.csv` / `summary_table.txt`: old columns plus `amp_mean`, `spikes_removed`, `var_ratio_vs_empty`, `rssi_delta_vs_empty_dB`, `alarm_rate_%`.
-- `motion_alarm_rate.png`: % of 1-second windows above the EMPTY-learned threshold. High on MOVING/STATIONARY = detection; high on FAN/AC/DOOR = false alarm. The EMPTY row itself is left blank (it would be circular).
-- `rssi_by_scenario.png`, `wall_vs_los.txt` (wall attenuation and detection LOS vs WALL).
-- Tune the detector with `--window` and `--k`; disable spike removal with `--no-despike`.
+**Detector options**
 
-On your existing LOS data: LOS_MOVING alarms in 100% of windows, LOS_STATIONARY in about 45%, LOS_FAN in 0%.
+| Flag | Effect |
+|---|---|
+| `--window` | Length of the analysis window. |
+| `--k` | Sensitivity: how far above the baseline a window must be to count as an alarm. |
+| `--no-despike` | Skip spike removal. |
 
-## Rehearsal and backup
-```
-python rehearsal_timer.py --slides 12 --slide-targets 9=90
-python backup_specter.py --src C:\specter C:\esp\esp-csi-master --dest "G:\My Drive\SPECTER"
-python backup_specter.py --src C:\specter C:\esp\esp-csi-master --dest E:\backups
-```
-Use the real path of your `esp-csi-master` folder. Run the backup to both the USB stick and the Drive sync folder.
+---
 
-## Not in this zip
-`build.py` and the pptx: I only received the CSI scripts and results, so the slide rendering/QA step is not covered. Send `build.py` and the current deck and I'll do that separately.
+## Naming Scenarios
+
+Recordings are named `<LOS|WALL>_<TYPE>[_VARIANT]`, for example `LOS_MOVING`, `WALL_STATIONARY`, or `LOS_FAN_HIGH`.
+
+Each prefix is compared against its own empty-room recording, so every set needs a matching baseline: `LOS_*` scenarios use `LOS_EMPTY`, and `WALL_*` scenarios use `WALL_EMPTY`.
+
+| Preset | Scenarios |
+|---|---|
+| `wall` | `WALL_EMPTY`, `WALL_STATIONARY`, `WALL_MOVING` |
+| `env` | `LOS_FAN_LOW`, `LOS_FAN_HIGH`, `LOS_AC`, `LOS_DOOR` |
+| `all` | Both sets |
+
+---
+
+## Recording Guidelines
+
+Results are only meaningful if the recordings are comparable:
+
+- **Keep the boards fixed** between recordings in the same set. If signal strength (RSSI) differs from the empty baseline by more than 5 dB, `analyze_csi.py` prints a warning, because a moved board and a person in the signal path look identical in that number.
+- **Record interference scenarios in an empty room** (fan, AC, door), so any alarm counts as a genuine false alarm.
+- **Repeat each scenario** at a different time of day to confirm the result is repeatable.
+
+---
+
+## Analysis Output
+
+Everything is written to `results/`.
+
+| File | Contents |
+|---|---|
+| `summary.csv` and `summary_table.txt` | Per-scenario statistics: mean amplitude, spikes removed, variance ratio vs. empty, RSSI difference vs. empty (dB), and alarm rate (%). |
+| `motion_alarm_rate.png` | Percentage of 1-second windows flagged as motion, per scenario. |
+| `rssi_by_scenario.png` | Signal strength per scenario. |
+| `wall_vs_los.txt` | Wall attenuation and a LOS vs. WALL detection comparison. |
+
+---
+
+## Interpreting Results
+
+The **alarm rate** is the percentage of 1-second windows that exceed the threshold learned from the empty-room baseline.
+
+- **High for `MOVING` and `STATIONARY`:** the detector is picking up the person.
+- **High for `FAN`, `AC`, or `DOOR`:** the detector is being fooled by non-human interference.
+- **The `EMPTY` row is left blank.** The threshold was learned from that recording, so scoring it would be circular.
+- A **variance ratio above 1** means the scenario fluctuates more than the empty room; the larger the ratio, the stronger the disturbance.
+
+In an early line-of-sight test, `LOS_MOVING` triggered alarms in 100% of windows, `LOS_STATIONARY` in about 45%, and the fan in 0%. These figures come from a single session per scenario and are indicative only.
